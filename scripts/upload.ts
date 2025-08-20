@@ -1,12 +1,11 @@
 // scripts/upload.ts
 import "dotenv/config";
-import { createReadStream } from "node:fs";
-import { promises as fs } from "node:fs";
-import crypto from "node:crypto";
-import path from "node:path";
 import glob from "fast-glob";
-import pLimit from "p-limit";
+import crypto from "node:crypto";
+import { createReadStream, promises as fs } from "node:fs";
+import path from "node:path";
 import OpenAI from "openai";
+import pLimit from "p-limit";
 
 type Manifest = {
   vectorStoreId: string;
@@ -38,7 +37,7 @@ async function withRetry<T>(
   max = MAX_RETRIES
 ): Promise<T> {
   let attempt = 0;
-  let lastErr: any;
+  let lastErr: unknown;
   while (attempt < max) {
     try {
       if (attempt > 0) {
@@ -46,11 +45,9 @@ async function withRetry<T>(
       }
       const res = await fn();
       return res;
-    } catch (e: any) {
+    } catch (e: unknown) {
       lastErr = e;
-      const status = e?.status ?? e?.response?.status ?? null;
-      const reqId = e?.requestID ?? e?.headers?.get?.("x-request-id");
-      const msg = e?.error?.message ?? e?.message ?? String(e);
+      const { status, reqId, message: msg } = extractErrorDetails(e);
       const retryable = isRetryableStatus(status);
       console.warn(`[error] ${label} status=${status ?? "?"} req=${reqId ?? "-"} msg=${msg}`);
       if (!retryable || attempt === max - 1) break;
@@ -60,6 +57,23 @@ async function withRetry<T>(
     }
   }
   throw lastErr;
+}
+
+type MaybeResponseLike = {
+  status?: number;
+  response?: { status?: number };
+  requestID?: string;
+  headers?: { get?: (key: string) => string | null | undefined };
+  error?: { message?: string };
+  message?: string;
+};
+
+function extractErrorDetails(e: unknown): { status?: number | null; reqId?: string; message: string } {
+  const err = (e ?? {}) as Partial<MaybeResponseLike>;
+  const status = err.status ?? err.response?.status ?? null;
+  const reqId = err.requestID ?? err.headers?.get?.("x-request-id") ?? undefined;
+  const message = err.error?.message ?? err.message ?? String(e);
+  return { status, reqId, message };
 }
 
 // -------- manifest I/O --------
@@ -99,7 +113,9 @@ async function listAttached(vectorStoreId: string): Promise<Set<string>> {
     );
     for (const f of page.data) set.add(f.id);
     if (!page.has_more) break;
-    after = page.last_id!;
+    const last = page.data[page.data.length - 1];
+    if (!last) break;
+    after = last.id;
   }
   return set;
 }
@@ -120,15 +136,15 @@ async function attachIfMissing(vectorStoreId: string, fileId: string | undefined
 
   await withRetry("vectorStores.files.create", async () => {
     try {
-      const res = await openai.vectorStores.files.create(vectorStoreId, { file_id: fileId });
+      await openai.vectorStores.files.create(vectorStoreId, { file_id: fileId });
       already.add(fileId);
-      return res;
-    } catch (e: any) {
-      const status = e?.status ?? e?.response?.status;
+      return;
+    } catch (e: unknown) {
+      const { status } = extractErrorDetails(e);
       // 409: すでに添付済み（APIの仕様変更や並行時にあり得る）→成功扱い
       if (status === 409) {
         already.add(fileId);
-        return { id: fileId } as any;
+        return;
       }
       throw e;
     }
@@ -136,16 +152,66 @@ async function attachIfMissing(vectorStoreId: string, fileId: string | undefined
 }
 
 // -------- main --------
-async function main() {
-  const paths = await glob(GLOB, { absolute: true });
-  if (!paths.length) throw new Error("no corpus files found");
+function ensureManifest(base: Manifest | null, vectorStoreId: string): Manifest {
+  const m: Manifest = base ?? { vectorStoreId, files: {}, byHash: {} };
+  if (m.vectorStoreId !== vectorStoreId) {
+    m.vectorStoreId = vectorStoreId;
+  }
+  return m;
+}
 
-  let manifest = await loadManifest();
-  const vectorStoreId = await ensureVectorStore(manifest);
-  if (!manifest) manifest = { vectorStoreId, files: {}, byHash: {} };
-  if (manifest.vectorStoreId !== vectorStoreId) {
-    manifest.vectorStoreId = vectorStoreId;
+async function main() {
+  const loaded = await loadManifest();
+  const vectorStoreId = await ensureVectorStore(loaded);
+  const manifest = ensureManifest(loaded, vectorStoreId);
+  if (loaded?.vectorStoreId !== manifest.vectorStoreId) {
     await saveManifest(manifest);
+  }
+
+  const paths = await glob(GLOB, { absolute: true });
+  if (!paths.length) {
+    const manifestFileIds = Object.values(manifest.files ?? {}).map((f) => f.fileId);
+    if (!manifestFileIds.length) {
+      throw new Error(
+        "no corpus files found. Place JSON files under 'kokkai/*.json' (note: '.gitignore' excludes '*kokkai*'), or provide a manifest with previously uploaded files."
+      );
+    }
+
+    console.log(
+      `[attach-only] no local files found; will (re)attach ${manifestFileIds.length} files to vectorStoreId=${vectorStoreId}`
+    );
+    const attached = await listAttached(vectorStoreId);
+    const limit = pLimit(CONCURRENCY);
+
+    let countDone = 0;
+    let countAttachedNew = 0;
+    let countSkipped = 0;
+    let countFailed = 0;
+
+    const tasks = manifestFileIds.map((fileId) =>
+      limit(async () => {
+        const beforeSize = attached.size;
+        try {
+          await attachIfMissing(vectorStoreId, fileId, attached);
+          if (attached.size > beforeSize) countAttachedNew++;
+          else countSkipped++;
+        } catch (e: unknown) {
+          countFailed++;
+          const { status, reqId, message: msg } = extractErrorDetails(e);
+          console.error(`[fail attach] ${fileId} status=${status ?? "?"} req=${reqId ?? "-"} msg=${msg}`);
+        } finally {
+          countDone++;
+        }
+      })
+    );
+
+    await Promise.allSettled(tasks);
+    console.log(
+      `[done attach-only] total=${manifestFileIds.length} attachedNew=${countAttachedNew} skipped=${countSkipped} failed=${countFailed}`
+    );
+    if (countFailed > 0) process.exit(2);
+    console.log("vectorStoreId:", vectorStoreId);
+    return;
   }
 
   console.log(`[start] files=${paths.length} vectorStoreId=${vectorStoreId}`);
@@ -176,9 +242,9 @@ async function main() {
   const onExit = async () => {
     clearInterval(hb);
     try {
-      await saveManifest(manifest!);
+      await saveManifest(manifest);
       console.log("[exit] manifest saved.");
-    } catch (e) {
+    } catch (e: unknown) {
       console.error("[exit] failed to save manifest:", e);
     } finally {
       process.exit(1);
@@ -193,8 +259,8 @@ async function main() {
       const base = path.basename(p);
       try {
         // 既にこのローカルパスを処理済みならスキップ（再添付だけ確認）
-        if (manifest!.files[p]) {
-          const { fileId } = manifest!.files[p];
+        if (manifest.files[p]) {
+          const { fileId } = manifest.files[p];
           console.log(`[resume] ${base} -> ${fileId}`);
           await attachIfMissing(vectorStoreId, fileId, attached);
           countSkipped++;
@@ -204,12 +270,12 @@ async function main() {
 
         console.log(`[hash] ${base}`);
         const hash = await sha256OfFile(p);
-        const existingByHash = manifest!.byHash[hash];
+        const existingByHash = manifest.byHash[hash];
         if (existingByHash) {
           console.log(`[attach-only] ${base} -> ${existingByHash}`);
           await attachIfMissing(vectorStoreId, existingByHash, attached);
-          manifest!.files[p] = { fileId: existingByHash, sha256: hash };
-          await saveManifest(manifest!);
+          manifest.files[p] = { fileId: existingByHash, sha256: hash };
+          await saveManifest(manifest);
           countAttachedOnly++;
           countDone++;
           return;
@@ -220,18 +286,16 @@ async function main() {
         console.log(`[attach] ${base} -> ${fileId}`);
         await attachIfMissing(vectorStoreId, fileId, attached);
 
-        manifest!.files[p] = { fileId, sha256: hash };
-        manifest!.byHash[hash] = fileId;
-        await saveManifest(manifest!);
+        manifest.files[p] = { fileId, sha256: hash };
+        manifest.byHash[hash] = fileId;
+        await saveManifest(manifest);
 
         console.log(`[ok] ${base} -> ${fileId}`);
         countUploaded++;
         countDone++;
-      } catch (e: any) {
+      } catch (e: unknown) {
         countFailed++;
-        const status = e?.status ?? e?.response?.status;
-        const reqId = e?.requestID ?? e?.headers?.get?.("x-request-id");
-        const msg = e?.error?.message ?? e?.message ?? String(e);
+        const { status, reqId, message: msg } = extractErrorDetails(e);
         console.error(`[fail] ${base} status=${status ?? "?"} req=${reqId ?? "-"} msg=${msg}`);
       }
     })
