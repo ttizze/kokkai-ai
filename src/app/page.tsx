@@ -110,7 +110,7 @@ export default function ChatPage() {
 							ご支援のお願い
 						</AlertTitle>
 						<AlertDescription className="text-sm leading-6">
-							この仏教AIはみなさまのご寄付で運営されています。<br />
+							この国会AIはみなさまのご寄付で運営されています。<br />
 							現在のご支援額総額は
 							<span className="mx-1 font-bold text-rose-400">¥2230</span>
 							です。
