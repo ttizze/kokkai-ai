@@ -4,12 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useChat } from "ai/react";
 import { Loader2, Send } from "lucide-react";
-// import Link from "next/link";
+import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
-// import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-// import { HeartHandshake, MessageCircle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { HeartHandshake, MessageCircle } from "lucide-react";
 
 export default function ChatPage() {
 	const { messages, input, handleInputChange, handleSubmit, isLoading } =
@@ -82,7 +82,7 @@ export default function ChatPage() {
 				</Button>
 			</form>
 			{/* --- 💖 Support Callout ここから --- */}
-			{/* <Alert
+			<Alert
 				variant="default"
 				className="
 					group relative flex flex-col gap-4
@@ -94,16 +94,16 @@ export default function ChatPage() {
 				"
 			>
 				{/* グロー用レイヤー */}
-				{/* <span
+				<span
 					className="
 						pointer-events-none absolute inset-0 -z-10 rounded-[inherit]
 						opacity-0 group-hover:opacity-100
 						bg-rose-500/20 blur-lg transition-opacity duration-500
 					"
-				/> */}
+				/>
 
 				{/* アイコン＋テキスト */}
-				{/* <div className="flex items-start gap-4">
+				<div className="flex items-start gap-4">
 					<HeartHandshake className="h-6 w-6 shrink-0 text-rose-400" />
 					<div className="flex-1 space-y-1">
 						<AlertTitle className="text-base font-semibold text-rose-50">
@@ -116,10 +116,10 @@ export default function ChatPage() {
 							です。
 						</AlertDescription>
 					</div>
-				</div> */}
+				</div>
 
 				{/* CTA ボタン – テキストの下＆幅いっぱい */}
-				{/* <Button
+				<Button
 					asChild
 					size="sm"
 					className="
@@ -134,11 +134,11 @@ export default function ChatPage() {
 					>
 						ご支援はこちら&nbsp;▶
 					</Link>
-				</Button> */}
-			{/* </Alert> */}
+				</Button>
+			</Alert>
 			{/* --- 💖 Support Callout ここまで --- */}
 			{/* --- 📝 Feedback Callout ここから --- */}
-			{/* <Alert
+			<Alert
 				variant="default"
 				className="
 					group relative flex flex-col gap-4
@@ -148,18 +148,18 @@ export default function ChatPage() {
 					ring-1 ring-inset ring-blue-500/20
 					transition-colors
 				"
-			> */}
+			>
 				{/* グロー用レイヤー */}
-				{/* <span
+				<span
 					className="
 						pointer-events-none absolute inset-0 -z-10 rounded-[inherit]
 						opacity-0 group-hover:opacity-100
 						bg-blue-500/20 blur-lg transition-opacity duration-500
 					"
-				/> */}
+				/>
 
 				{/* アイコン + テキストを 1 行に */}
-				{/* <div className="flex items-start gap-4">
+				<div className="flex items-start gap-4">
 					<MessageCircle className="h-6 w-6 shrink-0 text-blue-400" />
 					<div className="flex-1 space-y-1">
 						<AlertTitle className="text-base font-semibold text-blue-50">
@@ -169,10 +169,10 @@ export default function ChatPage() {
 							AI の回答精度向上のため、30&nbsp;秒のアンケートにご協力ください。
 						</AlertDescription>
 					</div>
-				</div> */}
+				</div>
 
 				{/* CTA ボタン – 文言の下＆幅いっぱい */}
-				{/* <Button
+				<Button
 					asChild
 					size="sm"
 					className="
@@ -188,7 +188,7 @@ export default function ChatPage() {
 						アンケートに回答&nbsp;▶
 					</Link>
 				</Button>
-			</Alert> */}
+			</Alert>
 			{/* --- 📝 Feedback Callout ここまで --- */}
 		</main>
 	);
